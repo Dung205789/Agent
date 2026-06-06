@@ -1,0 +1,8 @@
+# Pin for Kaggle (Python 3.10). Local dev may use newer; keep these for the
+# submission notebook environment to avoid breaking changes.
+kaggle-environments>=1.28.0
+stable-baselines3==2.3.2
+sb3-contrib==2.3.2
+gymnasium==0.29.1
+numpy==1.26.4
+torch==2.2.2

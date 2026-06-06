@@ -1,0 +1,21 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.ipynb_checkpoints/
+
+# RL artifacts
+models/*.zip
+snapshots/
+tb_logs/
+*.tar.gz
+
+# Kaggle / local
+kaggle.json
+kaggle*.json
+*kaggle*.json
+files.zip
+
+# OS
+Thumbs.db
+.DS_Store
