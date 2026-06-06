@@ -55,7 +55,7 @@ Workflow:
 # ── Section 1: setup ──
 cells.append(md("## 1. Setup"))
 cells.append(code(
-'!pip install -q "kaggle-environments>=1.28.0" "stable-baselines3==2.3.2" "sb3-contrib==2.3.2"\n'
+'!pip install -q "kaggle-environments>=1.28.0" "sb3-contrib==2.8.0"\n'
 "import warnings; warnings.filterwarnings('ignore')"))
 
 # ── Section 2: write env package for training ──

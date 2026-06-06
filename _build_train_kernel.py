@@ -51,7 +51,7 @@ submission notebook.
 > with `SubprocVecEnv` across CPU cores. GPU is enabled but helps the small MLP
 > only marginally."""))
 
-cells.append(code('!pip install -q "kaggle-environments>=1.28.0" "stable-baselines3==2.3.2" "sb3-contrib==2.3.2"\n'
+cells.append(code('!pip install -q "kaggle-environments>=1.28.0" "sb3-contrib==2.8.0" tqdm rich\n'
                   "import warnings; warnings.filterwarnings('ignore')"))
 
 cells.append(md("## Write package"))
@@ -73,19 +73,22 @@ cells.append(code(
 """import time, multiprocessing as mp
 from train.curriculum import train_stage1
 
-N_ENVS = max(2, mp.cpu_count())          # use all available cores
-TRAIN_STEPS = 3_000_000                   # bump/lower per session budget
+VERIFY = False                             # quick end-to-end check; False = real run
+# Cap env count: Kaggle reports the host's core count, oversubscribing slows
+# SubprocVecEnv badly. 4 is a safe sweet spot.
+N_ENVS = min(4, max(2, mp.cpu_count()))
+TRAIN_STEPS = 4_000 if VERIFY else 1_000_000
 
 t0 = time.time()
 model, path = train_stage1(
     total_timesteps=TRAIN_STEPS,
-    n_envs=N_ENVS,
-    use_subproc=True,
+    n_envs=(2 if VERIFY else N_ENVS),
+    use_subproc=(not VERIFY),              # DummyVecEnv for the fast verify
     save_path="/kaggle/working/best_model",
 )
-# keep a stage-named copy too
-model.save("/kaggle/working/stage1_random")
-print(f"done in {(time.time()-t0)/60:.1f} min  ->  {path}.zip   (n_envs={N_ENVS})")"""))
+model.save("/kaggle/working/stage1_random")   # stage-named copy
+print(f"done in {(time.time()-t0)/60:.1f} min -> {path}.zip "
+      f"(n_envs={2 if VERIFY else N_ENVS}, steps={TRAIN_STEPS}, cpu={mp.cpu_count()})")"""))
 
 cells.append(md("## Quick eval vs random"))
 cells.append(code(
@@ -105,7 +108,7 @@ def quick_winrate(model_path, n=10):
         if r[-1][0].reward > r[-1][1].reward: w += 1
     return w / n
 
-wr = quick_winrate("/kaggle/working/best_model.zip", n=10)
+wr = quick_winrate("/kaggle/working/best_model.zip", n=(5 if VERIFY else 20))
 print(f"win rate vs random: {wr:.0%}")""")
 
 cells.append(md("## Output check"))
@@ -132,7 +135,11 @@ meta = {
     "language": "python",
     "kernel_type": "notebook",
     "is_private": True,
-    "enable_gpu": True,
+    # GPU is disabled on purpose: this PPO workload is env-simulation bound
+    # (small MLP), so a GPU adds queue latency without speeding training. CPU
+    # kernels start fast and give cores for SubprocVecEnv. Flip to True only if
+    # you later switch to a CNN/large policy.
+    "enable_gpu": False,
     "enable_internet": True,
     "dataset_sources": [],
     "competition_sources": [],

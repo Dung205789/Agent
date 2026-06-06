@@ -5,10 +5,13 @@ __pycache__/
 .ipynb_checkpoints/
 
 # RL artifacts
-models/*.zip
+*.zip
 snapshots/
 tb_logs/
 *.tar.gz
+
+# Kaggle kernel output pulls
+kaggle_train/_*/
 
 # Kaggle / local
 kaggle.json
@@ -19,3 +22,6 @@ files.zip
 # OS
 Thumbs.db
 .DS_Store
+
+# Harness
+.claude/
