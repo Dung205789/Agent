@@ -2,6 +2,9 @@
 | Sub | Model            | Steps | Opponent        | Local WR | Kaggle ELO | Notes
 |-----|------------------|-------|-----------------|----------|------------|--------------------------|
 | S1  | stage1_random    |  5M   | random          | ???%     | ???        | First PPO (reward A+F)   |
+# Kaggle cloud verified 2026-06-06: CPU kernel `dzungngo179/orbit-wars-train`
+#   ran end-to-end (install sb3-contrib 2.8.0 -> train -> best_model.zip 6.1MB).
+#   Real 1M-step run launched as kernel v8 (CPU, SubprocVecEnv x4, tqdm on).
 | S2  | stage2_rulebased | 15M   | stage1          | ???%     | ???        | Orbital + full reward    |
 | S3  | selfplay_r3      |  9M   | self-pool       | ???%     | ???        | Self-play 3 rounds       |
 | S4  | selfplay_r8      | 15M   | self-pool       | ???%     | ???        | Self-play 8 rounds       |

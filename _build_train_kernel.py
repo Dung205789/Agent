@@ -10,7 +10,7 @@ import json
 import io
 import os
 
-KAGGLE_USER = "dzungngo179"
+KAGGLE_USER = "dungun"
 KERNEL_SLUG = "orbit-wars-train"
 
 
@@ -135,11 +135,10 @@ meta = {
     "language": "python",
     "kernel_type": "notebook",
     "is_private": True,
-    # GPU is disabled on purpose: this PPO workload is env-simulation bound
-    # (small MLP), so a GPU adds queue latency without speeding training. CPU
-    # kernels start fast and give cores for SubprocVecEnv. Flip to True only if
-    # you later switch to a CNN/large policy.
-    "enable_gpu": False,
+    # GPU enabled per request. Note: this PPO workload is env-simulation bound
+    # (small MLP), so the GPU mostly idles — throughput is set by CPU cores via
+    # SubprocVecEnv. Kept on for the account's GPU availability.
+    "enable_gpu": True,
     "enable_internet": True,
     "dataset_sources": [],
     "competition_sources": [],
