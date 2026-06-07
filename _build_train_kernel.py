@@ -65,51 +65,58 @@ cells.append(code("%%writefile train/selfplay.py\n" + selfplay))
 cells.append(code("%%writefile train/curriculum.py\n" + curriculum))
 
 cells.append(md(
-"""## Train Stage 1 (vs random)
+"""## Train Stage 1 — vs `starter` bot, 4-player, full reward
 
-Adjust `TRAIN_STEPS` to fit the session budget. ~3M is a solid first run;
-throughput depends on CPU cores. Output is saved as `best_model.zip`."""))
+Multi-launch action space (commands every owned planet/turn). A **checkpoint is
+saved every 100k steps** to `/kaggle/working/best_model.zip`, so whatever the
+session reaches is kept even if it hits the time limit. `TRAIN_STEPS` is set high
+on purpose — let it run as long as the session allows."""))
 cells.append(code(
 """import time, multiprocessing as mp
-from train.curriculum import train_stage1
+from sb3_contrib import MaskablePPO
+from stable_baselines3.common.callbacks import BaseCallback
+from train.curriculum import build_vec, PPO_BASE
 
-VERIFY = False                             # quick end-to-end check; False = real run
-# Cap env count: Kaggle reports the host's core count, oversubscribing slows
-# SubprocVecEnv badly. 4 is a safe sweet spot.
-N_ENVS = min(4, max(2, mp.cpu_count()))
-TRAIN_STEPS = 4_000 if VERIFY else 1_000_000
+class SaveCkpt(BaseCallback):
+    def __init__(self, freq, path):
+        super().__init__(); self.freq = freq; self.path = path; self._last = 0
+    def _on_step(self):
+        if self.num_timesteps - self._last >= self.freq:
+            self._last = self.num_timesteps
+            self.model.save(self.path)   # overwrite latest checkpoint
+        return True
+
+N_ENVS = min(4, max(2, mp.cpu_count()))    # CPU cores -> parallel envs
+TRAIN_STEPS = 5_000_000                     # checkpointed; keeps whatever completes
+
+vec = build_vec("starter", "full", N_ENVS, use_subproc=True)   # 4-player vs starter
+cfg = dict(PPO_BASE); cfg["tensorboard_log"] = None
+model = MaskablePPO("MlpPolicy", vec, **cfg)
+ckpt = SaveCkpt(100_000, "/kaggle/working/best_model")
 
 t0 = time.time()
-model, path = train_stage1(
-    total_timesteps=TRAIN_STEPS,
-    n_envs=(2 if VERIFY else N_ENVS),
-    use_subproc=(not VERIFY),              # DummyVecEnv for the fast verify
-    save_path="/kaggle/working/best_model",
-)
-model.save("/kaggle/working/stage1_random")   # stage-named copy
-print(f"done in {(time.time()-t0)/60:.1f} min -> {path}.zip "
-      f"(n_envs={2 if VERIFY else N_ENVS}, steps={TRAIN_STEPS}, cpu={mp.cpu_count()})")"""))
+try:
+    model.learn(TRAIN_STEPS, progress_bar=True, callback=ckpt)
+finally:
+    model.save("/kaggle/working/best_model")    # always save final/partial
+print(f"elapsed {(time.time()-t0)/60:.1f} min  (n_envs={N_ENVS}, cpu={mp.cpu_count()})")"""))
 
-cells.append(md("## Quick eval vs random"))
+cells.append(md("## Quick eval vs starter (4-player)"))
 cells.append(code(
-"""from eval_arena import run_match  # written below
-"""))
-# inline a tiny arena to avoid needing the eval package
-cells[-1] = code(
 """from env.orbit_env import resolve_opponent
 from kaggle_environments import make
 
-def quick_winrate(model_path, n=10):
-    a = resolve_opponent(model_path); b = "random"
+def quick_winrate(model_path, n=12):
+    a = resolve_opponent(model_path)
     w = 0
     for i in range(n):
-        env = make("orbit_wars", configuration={"seed": i})
-        r = env.run([a, b])
-        if r[-1][0].reward > r[-1][1].reward: w += 1
+        r = make("orbit_wars", configuration={"seed": i}).run([a, "starter", "starter", "starter"])
+        rewards = [s["reward"] for s in r[-1]]
+        if rewards[0] == max(rewards): w += 1
     return w / n
 
-wr = quick_winrate("/kaggle/working/best_model.zip", n=(5 if VERIFY else 20))
-print(f"win rate vs random: {wr:.0%}")""")
+wr = quick_winrate("/kaggle/working/best_model.zip", n=12)
+print(f"top-1 rate vs 3x starter (4p): {wr:.0%}")"""))
 
 cells.append(md("## Output check"))
 cells.append(code('import os\nprint([f for f in os.listdir("/kaggle/working") if f.endswith(".zip")])'))
@@ -135,10 +142,10 @@ meta = {
     "language": "python",
     "kernel_type": "notebook",
     "is_private": True,
-    # GPU enabled per request. Note: this PPO workload is env-simulation bound
-    # (small MLP), so the GPU mostly idles — throughput is set by CPU cores via
-    # SubprocVecEnv. Kept on for the account's GPU availability.
-    "enable_gpu": True,
+    # CPU on purpose: the 4-player env sim (Python) is the bottleneck, so 4 CPU
+    # cores via SubprocVecEnv beat a GPU session's 2 cores. The tiny MLP gains
+    # ~nothing from GPU.
+    "enable_gpu": False,
     "enable_internet": True,
     "dataset_sources": [],
     "competition_sources": [],
