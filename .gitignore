@@ -33,3 +33,6 @@ results/
 *.tex
 *.pdf
 *.aux
+
+# generated intermediate (deliverable is submit/main.py)
+main_np.py

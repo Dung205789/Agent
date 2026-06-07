@@ -9,9 +9,26 @@ Model weights are loaded from an attached Kaggle Dataset. Set OW_MODEL_PATH to
 override the path (used for local testing).
 """
 import os
+import sys
+import types
 import math
 import numpy as np
 from kaggle_environments.envs.orbit_wars.orbit_wars import Planet, Fleet
+
+# Make the sb3 import robust on any image: stable-baselines3 unconditionally
+# does `from torch.utils.tensorboard import SummaryWriter`, which on some images
+# drags in a broken tensorflow/protobuf pair and raises a non-ImportError. Probe
+# it once and stub it if broken so the agent still loads. No-op on clean images.
+try:
+    import torch.utils.tensorboard  # noqa: F401
+except Exception:
+    _tb = types.ModuleType("torch.utils.tensorboard")
+    class SummaryWriter:  # noqa: N801
+        def __init__(self, *a, **k):
+            raise RuntimeError("tensorboard unavailable (stub)")
+    _tb.SummaryWriter = SummaryWriter
+    sys.modules["torch.utils.tensorboard"] = _tb
+
 from sb3_contrib import MaskablePPO
 
 # ── Constants ─────────────────────────────────────────────────────────
@@ -161,8 +178,12 @@ def decode_action(action, raw_planets, player, av):
 
 # ── Model Loading ─────────────────────────────────────────────────────
 _MODEL = None
+# NOTE: kaggle execs a file agent without __file__ defined, so never reference
+# __file__ at module level here.
 _CANDIDATE_PATHS = [
     os.environ.get("OW_MODEL_PATH", ""),
+    "/kaggle_simulations/agent/best_model.zip",   # tar.gz bundle extract dir
+    "best_model.zip",                              # cwd fallback
     "/kaggle/input/orbit-wars-weights/best_model.zip",
     "/kaggle/input/orbit-wars-weights/stage3_selfplay.zip",
     "/kaggle/input/orbit-wars-weights/stage1_random.zip",
