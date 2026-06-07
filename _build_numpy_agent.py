@@ -25,7 +25,7 @@ W1, b1 = sd["mlp_extractor.policy_net.2.weight"], sd["mlp_extractor.policy_net.2
 W2, b2 = sd["mlp_extractor.policy_net.4.weight"], sd["mlp_extractor.policy_net.4.bias"]
 Wa, ba = sd["action_net.weight"], sd["action_net.bias"]
 
-NVEC = [10, 40, 4]
+from env.core import ACTION_NVEC as NVEC
 
 def np_forward(obs, mask):
     x = np.tanh(obs @ W0.T + b0)
@@ -39,10 +39,10 @@ def np_forward(obs, mask):
         o += n
     return out
 
-# ── verify numpy == sb3 deterministic action, on real game states ──
+# ── verify numpy == sb3 deterministic action, on real game states (4p) ──
 mism = 0; total = 0
 for seed in range(6):
-    tr = make("orbit_wars", configuration={"seed": seed}).train([None, "random"])
+    tr = make("orbit_wars", configuration={"seed": seed}).train([None, "starter", "starter", "starter"])
     obs = tr.reset(); done = False; steps = 0
     while not done and steps < 120:
         planets = obs.get("planets", []); player = obs.get("player", 0)
@@ -86,10 +86,10 @@ from kaggle_environments.envs.orbit_wars.orbit_wars import Planet, Fleet
 '''
 
 footer = '''# ── Embedded policy weights (base64 npz) ─────────────────────────────
-_NVEC = [10, 40, 4]
+_NVEC = __NVEC__
 _W = None
 _WEIGHTS_B64 = (
-%s)
+__BLOB__)
 
 def _weights():
     global _W
@@ -124,7 +124,8 @@ def agent(obs, config=None):
 # chunk b64
 CH = 120
 blob = "".join('    "%s"\n' % b64[i:i+CH] for i in range(0, len(b64), CH))
-out = header + mid + (footer % blob)
+nvec_literal = "%r * %d" % (list(NVEC[:2]), len(NVEC) // 2)   # e.g. [41, 4] * 40
+out = header + mid + footer.replace("__NVEC__", nvec_literal).replace("__BLOB__", blob)
 with open("main_np.py", "w", encoding="utf-8") as f:
     f.write(out)
 import os as _os

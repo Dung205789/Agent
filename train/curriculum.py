@@ -39,10 +39,10 @@ PPO_BASE = dict(
 N_ENVS = 8
 
 
-def build_vec(opponent, reward_profile, n_envs, use_subproc=True):
-    """Vectorised env. Falls back to DummyVecEnv for n_envs == 1 or when
-    subprocesses are undesirable (debugging / Windows quirks)."""
-    factories = [make_masked_env(opponent, reward_profile) for _ in range(n_envs)]
+def build_vec(opponent, reward_profile, n_envs, use_subproc=True, num_players=4):
+    """Vectorised 4-player env (matches the leaderboard). Falls back to
+    DummyVecEnv for n_envs == 1 or when subprocesses are undesirable."""
+    factories = [make_masked_env(opponent, reward_profile, num_players) for _ in range(n_envs)]
     if use_subproc and n_envs > 1:
         return SubprocVecEnv(factories)
     return DummyVecEnv(factories)
@@ -50,14 +50,15 @@ def build_vec(opponent, reward_profile, n_envs, use_subproc=True):
 
 def train_stage1(total_timesteps=5_000_000, n_envs=N_ENVS, use_subproc=True,
                  save_path=None, ppo_overrides=None, progress_bar=True):
-    """vs random — bootstrap from scratch. Reward = A + F (minimal)."""
-    vec = build_vec("random", "minimal", n_envs, use_subproc)
+    """Stage 1 — bootstrap vs the `starter` heuristic bot in 4-player games,
+    full reward. (Random is too weak to learn anything competitive from.)"""
+    vec = build_vec("starter", "full", n_envs, use_subproc)
     cfg = dict(PPO_BASE)
     if ppo_overrides:
         cfg.update(ppo_overrides)
     model = MaskablePPO("MlpPolicy", vec, **cfg)
     model.learn(total_timesteps, progress_bar=progress_bar)
-    path = save_path or os.path.join(MODELS_DIR, "stage1_random")
+    path = save_path or os.path.join(MODELS_DIR, "stage1_starter")
     model.save(path)
     vec.close()
     return model, path
@@ -65,14 +66,15 @@ def train_stage1(total_timesteps=5_000_000, n_envs=N_ENVS, use_subproc=True,
 
 def train_stage2(stage1_path=None, total_timesteps=15_000_000, n_envs=N_ENVS,
                  use_subproc=True, save_path=None, progress_bar=True):
-    """vs stage-1 model — learn orbital intercept. Reward = full."""
-    stage1_path = stage1_path or os.path.join(MODELS_DIR, "stage1_random.zip")
-    vec = build_vec(stage1_path, "full", n_envs, use_subproc)
+    """Stage 2 — fine-tune vs a mix of the stage-1 model and `starter` (4p)."""
+    stage1_path = stage1_path or os.path.join(MODELS_DIR, "stage1_starter.zip")
+    # 3 opponents: two copies of the trained model + one starter for variety.
+    vec = build_vec([stage1_path, stage1_path, "starter"], "full", n_envs, use_subproc)
     model = MaskablePPO.load(stage1_path.replace(".zip", ""), env=vec)
-    model.learning_rate = 1e-4      # fine-tune
+    model.learning_rate = 1e-4
     model.ent_coef = 0.01
     model.learn(total_timesteps, reset_num_timesteps=False, progress_bar=progress_bar)
-    path = save_path or os.path.join(MODELS_DIR, "stage2_rulebased")
+    path = save_path or os.path.join(MODELS_DIR, "stage2_selfplay")
     model.save(path)
     vec.close()
     return model, path
@@ -80,8 +82,8 @@ def train_stage2(stage1_path=None, total_timesteps=15_000_000, n_envs=N_ENVS,
 
 def train_stage3(stage2_path=None, rounds=3, steps_per_round=3_000_000,
                  n_envs=N_ENVS, use_subproc=True, save_path=None, progress_bar=True):
-    """Self-play with an ELO pool. Reward = full."""
-    stage2_path = stage2_path or os.path.join(MODELS_DIR, "stage2_rulebased.zip")
+    """Stage 3 — self-play (4p) with an ELO snapshot pool."""
+    stage2_path = stage2_path or os.path.join(MODELS_DIR, "stage2_selfplay.zip")
     pool = SelfPlayPool(seed=stage2_path)
 
     model = MaskablePPO.load(stage2_path.replace(".zip", ""))
@@ -90,13 +92,14 @@ def train_stage3(stage2_path=None, rounds=3, steps_per_round=3_000_000,
 
     last_round_path = None
     for round_i in range(rounds):
-        opp = pool.sample()
-        vec = build_vec(opp, "full", n_envs, use_subproc)
+        # 3 opponents sampled from the pool (mix of recent snapshots).
+        opps = [pool.sample() for _ in range(3)]
+        vec = build_vec(opps, "full", n_envs, use_subproc)
         model.set_env(vec)
         model.learn(steps_per_round, reset_num_timesteps=False, progress_bar=progress_bar)
         last_round_path = pool.save(model, round_i)
         vec.close()
-        print(f"[stage3] round {round_i}: opp={opp} pool={pool.paths}")
+        print(f"[stage3] round {round_i}: opps={opps} pool={pool.paths}")
 
     path = save_path or os.path.join(MODELS_DIR, "stage3_selfplay")
     model.save(path)

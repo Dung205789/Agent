@@ -38,6 +38,9 @@ MAX_SPEED = 6.0
 N_PLANETS, N_FLEETS = 40, 20
 FRACTIONS = [0.25, 0.50, 0.75, 0.95]
 MIN_LAUNCH_SHIPS = 5
+N_SLOTS = N_PLANETS              # multi-launch: one action slot per planet index
+HOLD = N_PLANETS                 # target index meaning "do not launch"
+N_TGT = N_PLANETS + 1            # 0..39 target + HOLD(40)
 
 # ── Physics ───────────────────────────────────────────────────────────
 def fleet_speed(n):
@@ -138,43 +141,51 @@ def encode_obs(raw):
     ]
     return np.clip(np.array(pf + ff + gf, dtype=np.float32), -2.0, 2.0)
 
-# ── Action Masking ────────────────────────────────────────────────────
+# ── Action Masking (multi-launch: per-planet slots) ───────────────────
 def get_masks(raw_planets, player):
     planets = [Planet(*p) for p in raw_planets]
-    my_pl = [p for p in planets if p.owner == player]
-    src_m = np.zeros(10, dtype=bool)
-    for i, p in enumerate(my_pl[:10]):
-        src_m[i] = p.ships >= MIN_LAUNCH_SHIPS
-    if not src_m.any():
-        if my_pl:
-            best = max(range(min(len(my_pl), 10)), key=lambda i: my_pl[i].ships)
-            src_m[best] = True
-        else:
-            src_m[0] = True
-    return np.concatenate([src_m, np.ones(40, bool), np.ones(4, bool)])
+    n = len(planets)
+    parts = []
+    for i in range(N_SLOTS):
+        tmask = np.zeros(N_TGT, dtype=bool)
+        tmask[HOLD] = True
+        if i < n and planets[i].owner == player and planets[i].ships >= MIN_LAUNCH_SHIPS:
+            for j in range(N_PLANETS):
+                if j < n and j != i:
+                    tmask[j] = True
+        parts.append(tmask)
+        parts.append(np.ones(len(FRACTIONS), dtype=bool))
+    return np.concatenate(parts)
 
-# ── Action Decode ─────────────────────────────────────────────────────
-def decode_action(action, raw_planets, player, av):
-    planets = [Planet(*p) for p in raw_planets]
-    my_pl = [p for p in planets if p.owner == player]
-    if not my_pl or not planets:
-        return []
-    src = my_pl[int(action[0]) % len(my_pl)]
-    tgt = planets[int(action[1]) % len(planets)]
-    if tgt.id == src.id:
-        return []
-    ships = max(1, min(int(src.ships * FRACTIONS[int(action[2]) % 4]), src.ships))
-    if ships <= 0:
-        return []
+# ── Action Decode (emits multiple launches per turn) ──────────────────
+def _resolve_angle(src, tgt, ships, av):
     angle, tx, ty = intercept_angle(src, tgt, ships, av)
     if hits_sun(src.x, src.y, tx, ty):
         for d in (math.pi / 12, -math.pi / 12, math.pi / 6, -math.pi / 6):
             a2 = angle + d
             ex, ey = src.x + 80 * math.cos(a2), src.y + 80 * math.sin(a2)
             if not hits_sun(src.x, src.y, ex, ey):
-                angle = a2
-                break
-    return [[src.id, float(angle), int(ships)]]
+                return a2
+    return angle
+
+def decode_action(action, raw_planets, player, av):
+    planets = [Planet(*p) for p in raw_planets]
+    n = len(planets)
+    moves = []
+    for i in range(N_SLOTS):
+        if i >= n:
+            break
+        tgt = int(action[2 * i]); frac = int(action[2 * i + 1])
+        src = planets[i]
+        if src.owner != player or src.ships < MIN_LAUNCH_SHIPS:
+            continue
+        if tgt == HOLD or tgt >= n or tgt == i:
+            continue
+        ships = min(int(src.ships * FRACTIONS[frac % len(FRACTIONS)]), src.ships)
+        if ships <= 0:
+            continue
+        moves.append([src.id, float(_resolve_angle(src, planets[tgt], ships, av)), int(ships)])
+    return moves
 
 # ── Model Loading ─────────────────────────────────────────────────────
 _MODEL = None

@@ -67,10 +67,11 @@ def resolve_opponent(opponent):
 class OrbitWarsEnv(gym.Env):
     metadata = {"render_modes": []}
 
-    def __init__(self, opponent="random", reward_profile="full"):
+    def __init__(self, opponent="starter", reward_profile="full", num_players=4):
         super().__init__()
-        self.opponent = opponent
+        self.opponent = opponent          # str/callable, or list of (num_players-1)
         self.reward_profile = reward_profile
+        self.num_players = num_players     # leaderboard runs 4-player games
 
         self.observation_space = spaces.Box(-2.0, 2.0, (OBS_DIM,), np.float32)
         self.action_space = spaces.MultiDiscrete(ACTION_NVEC)
@@ -80,12 +81,19 @@ class OrbitWarsEnv(gym.Env):
         self._prev = None
         self._step = 0
 
+    def _opponents(self):
+        """Resolve the (num_players - 1) opponent agents."""
+        n = self.num_players - 1
+        opp = self.opponent
+        specs = opp if isinstance(opp, (list, tuple)) else [opp] * n
+        specs = (list(specs) + [specs[-1]] * n)[:n]   # pad/truncate to n
+        return [resolve_opponent(s) for s in specs]
+
     # ── Gym API ──
     def reset(self, seed=None, options=None):
         super().reset(seed=seed)
         self._env = make("orbit_wars", debug=False)
-        opp = resolve_opponent(self.opponent)
-        self._trainer = self._env.train([None, opp])
+        self._trainer = self._env.train([None] + self._opponents())
         raw = self._trainer.reset()
         self._prev = raw
         self._step = 0
@@ -120,9 +128,10 @@ class OrbitWarsEnv(gym.Env):
         return get_action_masks(raw_planets, player)
 
 
-def make_masked_env(opponent="random", reward_profile="full"):
+def make_masked_env(opponent="starter", reward_profile="full", num_players=4):
     """Factory returning an ActionMasker-wrapped OrbitWarsEnv."""
     def _init():
-        env = OrbitWarsEnv(opponent=opponent, reward_profile=reward_profile)
+        env = OrbitWarsEnv(opponent=opponent, reward_profile=reward_profile,
+                           num_players=num_players)
         return ActionMasker(env, lambda e: e.action_masks())
     return _init

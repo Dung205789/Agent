@@ -36,3 +36,6 @@ results/
 
 # generated intermediate (deliverable is submit/main.py)
 main_np.py
+
+# downloaded episode logs/replays
+kaggle_result/

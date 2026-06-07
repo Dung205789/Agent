@@ -25,8 +25,18 @@ N_PLANETS, N_FLEETS = 40, 20
 FRACTIONS = [0.25, 0.50, 0.75, 0.95]
 
 OBS_DIM = 12 * N_PLANETS + 7 * N_FLEETS + 5      # 480 + 140 + 5 = 625
-ACTION_NVEC = [10, 40, 4]                         # MultiDiscrete([src, tgt, frac])
-MIN_LAUNCH_SHIPS = 5                              # mask src planets below this
+
+# ── Multi-launch action space ─────────────────────────────────────────
+# One action slot PER planet index: slot i decides what planets[i] does this
+# turn. This lets the agent command every owned planet each turn (real bots do),
+# instead of a single launch. Each slot picks a target planet (or HOLD) and a
+# ships fraction.
+N_SLOTS = N_PLANETS              # 40 source slots, slot i <-> planets[i]
+HOLD = N_PLANETS                 # target index meaning "do not launch"
+N_TGT = N_PLANETS + 1            # 0..39 target planet + HOLD(40)
+# MultiDiscrete([41, 4] * 40) -> 80 sub-actions, mask length 40*(41+4)=1800
+ACTION_NVEC = [N_TGT, len(FRACTIONS)] * N_SLOTS
+MIN_LAUNCH_SHIPS = 5                              # a planet below this holds
 
 
 # ── Physics ───────────────────────────────────────────────────────────
@@ -166,61 +176,63 @@ def encode_obs(raw_obs) -> np.ndarray:
     return np.clip(vec, -2.0, 2.0)
 
 
-# ── Action masking ────────────────────────────────────────────────────
-def get_action_masks(raw_planets, player: int) -> np.ndarray:
-    """Bool mask of shape (10 + 40 + 4,). True == valid choice.
-
-    Guarantees at least one valid src so MaskablePPO never sees an empty
-    discrete dimension (which would raise)."""
-    planets = [Planet(*p) for p in raw_planets]
-    my_pl = [p for p in planets if p.owner == player]
-
-    src_mask = np.zeros(10, dtype=bool)
-    for i, p in enumerate(my_pl[:10]):
-        src_mask[i] = p.ships >= MIN_LAUNCH_SHIPS
-
-    if not src_mask.any():
-        # Fallback: pick the planet with the most ships (or slot 0 if none).
-        if my_pl:
-            best = max(range(min(len(my_pl), 10)), key=lambda i: my_pl[i].ships)
-            src_mask[best] = True
-        else:
-            src_mask[0] = True
-
-    tgt_mask = np.ones(40, dtype=bool)
-    frac_mask = np.ones(4, dtype=bool)
-    return np.concatenate([src_mask, tgt_mask, frac_mask])
-
-
-# ── Action decoding ───────────────────────────────────────────────────
-def decode_action(action, raw_planets, player: int, ang_vel: float) -> list:
-    """Map MultiDiscrete indices -> kaggle action [[from_id, angle, ships]]."""
-    planets = [Planet(*p) for p in raw_planets]
-    my_pl = [p for p in planets if p.owner == player]
-    if not my_pl or not planets:
-        return []
-
-    src_idx, tgt_idx, frac_idx = int(action[0]), int(action[1]), int(action[2])
-    src = my_pl[src_idx % len(my_pl)]
-    tgt = planets[tgt_idx % len(planets)]
-    if tgt.id == src.id:
-        return []
-
-    ships = max(1, int(src.ships * FRACTIONS[frac_idx % 4]))
-    ships = min(ships, src.ships)
-    if ships <= 0:
-        return []
-
+def _resolve_launch_angle(src, tgt, ships, ang_vel):
+    """Intercept angle, nudged to arc past the sun if the straight line clips it."""
     angle, tx, ty = intercept_angle(src, tgt, ships, ang_vel)
-
-    # If the straight intercept line clips the sun, nudge the angle to arc past it.
     if hits_sun(src.x, src.y, tx, ty):
         for delta in (math.pi / 12, -math.pi / 12, math.pi / 6, -math.pi / 6):
             a2 = angle + delta
             ex = src.x + 80 * math.cos(a2)
             ey = src.y + 80 * math.sin(a2)
             if not hits_sun(src.x, src.y, ex, ey):
-                angle = a2
-                break
+                return a2
+    return angle
 
-    return [[src.id, float(angle), int(ships)]]
+
+# ── Action masking ────────────────────────────────────────────────────
+def get_action_masks(raw_planets, player: int) -> np.ndarray:
+    """Bool mask of length N_SLOTS*(N_TGT + len(FRACTIONS)) = 1800.
+
+    Layout per slot i: [N_TGT target bools][len(FRACTIONS) frac bools].
+    HOLD is always valid, so every categorical has >=1 valid choice (MaskablePPO
+    never sees an empty dimension). A slot can launch only if planets[i] is owned
+    by `player` and has >= MIN_LAUNCH_SHIPS."""
+    planets = [Planet(*p) for p in raw_planets]
+    n = len(planets)
+    parts = []
+    for i in range(N_SLOTS):
+        tmask = np.zeros(N_TGT, dtype=bool)
+        tmask[HOLD] = True
+        if i < n and planets[i].owner == player and planets[i].ships >= MIN_LAUNCH_SHIPS:
+            for j in range(N_PLANETS):
+                if j < n and j != i:          # any existing planet except self
+                    tmask[j] = True
+        parts.append(tmask)
+        parts.append(np.ones(len(FRACTIONS), dtype=bool))
+    return np.concatenate(parts)
+
+
+# ── Action decoding ───────────────────────────────────────────────────
+def decode_action(action, raw_planets, player: int, ang_vel: float) -> list:
+    """Map the MultiDiscrete vector -> a list of kaggle moves (one per owned
+    planet that chose a real target). Emits MULTIPLE launches per turn."""
+    planets = [Planet(*p) for p in raw_planets]
+    n = len(planets)
+    moves = []
+    for i in range(N_SLOTS):
+        if i >= n:
+            break
+        tgt = int(action[2 * i])
+        frac = int(action[2 * i + 1])
+        src = planets[i]
+        if src.owner != player or src.ships < MIN_LAUNCH_SHIPS:
+            continue
+        if tgt == HOLD or tgt >= n or tgt == i:
+            continue
+        target = planets[tgt]
+        ships = min(int(src.ships * FRACTIONS[frac % len(FRACTIONS)]), src.ships)
+        if ships <= 0:
+            continue
+        angle = _resolve_launch_angle(src, target, ships, ang_vel)
+        moves.append([src.id, float(angle), int(ships)])
+    return moves
