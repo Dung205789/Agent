@@ -25,3 +25,11 @@ Thumbs.db
 
 # Harness
 .claude/
+
+# Trained model artifacts (live on Kaggle / local, not in git)
+results/
+
+# Unrelated documents that share this working directory
+*.tex
+*.pdf
+*.aux
