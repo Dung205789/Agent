@@ -5,5 +5,9 @@
 kaggle-environments>=1.28.0
 sb3-contrib==2.8.0
 stable-baselines3==2.8.0
+# Kaggle's image uses numpy 2.x. Models saved there will NOT unpickle under
+# numpy<2 — and inside kaggle_environments env.run the load error is swallowed,
+# so the agent silently does nothing (looks like a terrible win rate). Keep 2.x.
+numpy>=2.1,<3
 tqdm
 rich
